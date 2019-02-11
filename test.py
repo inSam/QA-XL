@@ -1,4 +1,4 @@
-"""Test a model and generate submission CSV for Kaggle.
+"""Test a model and generate submission CSV.
 
 Usage:
     > python test.py --split SPLIT --load_path PATH --name NAME
@@ -125,7 +125,7 @@ def main(args):
                        split=args.split,
                        num_visuals=args.num_visuals)
 
-    # Write submission file for Kaggle
+    # Write submission file
     sub_path = join(args.save_dir, args.split + '_' + args.sub_file)
     log.info('Writing submission file to {}...'.format(sub_path))
     with open(sub_path, 'w') as csv_fh:
