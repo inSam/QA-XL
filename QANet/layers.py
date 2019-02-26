@@ -13,7 +13,10 @@ import torch.nn.functional as F
 #from util import masked_softmax
 
 class HighwayEncoder(nn.Module):
-    """Encode an input sequence using a highway network.
+    """
+    Edits: An dropout layer with p=0.1 was added
+
+    Encode an input sequence using a highway network.
     Based on the paper:
     "Highway Networks"
     by Rupesh Kumar Srivastava, Klaus Greff, Jürgen Schmidhuber
@@ -98,4 +101,6 @@ class Embedding(nn.Module):
         emb = self.conv1d(emb)
         emb = self.high(emb)
         return emb
-        
+
+
+
