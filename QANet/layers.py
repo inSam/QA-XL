@@ -108,7 +108,7 @@ class Embedding(nn.Module):
         emb = torch.cat([ch_emb, wd_emb], dim=1)
         emb = self.conv1d(emb).transpose(1,2)
         #Emb: shape [batch_size * seq_len * hidden_size]
-        print(emb.size())
+        #print(emb.size())
         emb = self.high(emb).transpose(1,2)
         return emb
 

@@ -48,11 +48,14 @@ class QANet(nn.Module):
         wemb_dim = word_vectors.size()[1]
         cemb_dim = char_vectors.size()[1]
         #print("Word vector dim-%d, Char vector dim-%d" % (wemb_dim, cemb_dim))
+
+        #Layer Declarations
         self.emb = layers.Embedding(wemb_dim, cemb_dim, d_model)
         self.emb_enc = layers.Encoder(num_conv=4, d_model=d_model, num_head=num_head, k=7, dropout=0.1)
         self.cq_att = layers.CQAttention(d_model=d_model)
         self.cq_resizer = layers.Initialized_Conv1d(d_model * 4, d_model) #Foward layer to reduce dimension of cq_att output back to d_dim
         self.model_enc_blks = nn.ModuleList([layers.Encoder(num_conv=2, d_model=d_model, num_head=num_head, k=5, dropout=0.1) for _ in range(7)])
+        self.out = layers.QAOutput(d_model)
 
     def forward(self, Cword, Cchar, Qword, Qchar):
         """
@@ -81,6 +84,8 @@ class QANet(nn.Module):
         for i, blk in enumerate(self.model_enc_blks):
              M0 = blk(M0, maskC, i*(2+2)+1, 7)
         M3 = M0
+        p1, p2 = self.out(M1, M2, M3, maskC)
+        return p1, p2        
 
 if __name__ == "__main__":
     torch.manual_seed(12)
@@ -125,6 +130,7 @@ if __name__ == "__main__":
     num_head = 8
     qanet = QANet(wv_tensor, cv_tensor,
                   c_max_len, q_max_len, d_model, train_cemb=False, num_head=num_head)
-    qanet(context_wids, context_cids,
-                   question_wids, question_cids)
-    
+    p1, p2 = qanet(context_wids, context_cids,
+                       question_wids, question_cids)
+    print(p1.shape)
+    print(p2.shape)    
