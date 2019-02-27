@@ -5,6 +5,8 @@ Reference: https://arxiv.org/pdf/1804.09541.pdf
 Author: 
    Sam Xu (samx@stanford.edu)
 """
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -34,7 +36,7 @@ class HighwayEncoder(nn.Module):
 
     def forward(self, x):
         for gate, transform in zip(self.gates, self.transforms):
-            # Shapes of g, t, and x are all (batch_size, seq_len, hidden_size)
+            # Shapes of g, t, and x are all (batch_size, hidden_size, seq_len)
             g = torch.sigmoid(gate(x))
             t = F.relu(transform(x))
             t = F.dropout(t, p=0.1, training=self.training)
@@ -104,8 +106,10 @@ class Embedding(nn.Module):
         wd_emb = F.dropout(wd_emb, p=self.dropout_w, training=self.training)
         wd_emb = wd_emb.transpose(1, 2)
         emb = torch.cat([ch_emb, wd_emb], dim=1)
-        emb = self.conv1d(emb)
-        emb = self.high(emb)
+        emb = self.conv1d(emb).transpose(1,2)
+        #Emb: shape [batch_size * seq_len * hidden_size]
+        print(emb.size())
+        emb = self.high(emb).transpose(1,2)
         return emb
 
 class DepthwiseSeperableConv(nn.Module):
@@ -128,8 +132,8 @@ class DepthwiseSeperableConv(nn.Module):
     """
     def __init__(self, in_channel, out_channel, k, bias=True):
         super(DepthwiseSeperableConv, self).__init__()
-        self.depthwise_conv = nn.conv1d(in_channels=in_channel, out_channels=in_channel, kernel_size = k, groups = in_channels, padding = k//2, bias = False)
-        self.pointwise_conv = nn.conv1d(in_channels=in_channel, out_channels=out_channel, kernel_size = 1, bias=bias)
+        self.depthwise_conv = nn.Conv1d(in_channels=in_channel, out_channels=in_channel, kernel_size = k, groups = in_channel, padding = k//2, bias = False)
+        self.pointwise_conv = nn.Conv1d(in_channels=in_channel, out_channels=out_channel, kernel_size = 1, bias=bias)
 
     def forward(self, input):
         return F.relu(self.pointwise_conv(self.depthwise_conv(input)))
@@ -153,7 +157,7 @@ class SelfAttention(nn.Module):
     Question: Do I use bias in the linear layers? 
     """
     def __init__(self, d_model, num_head, dropout=0.1):
-        super(selfAttention, self).__init__()
+        super(SelfAttention, self).__init__()
         self.d_model = d_model
         self.dropout = dropout
         self.num_head = num_head
@@ -166,14 +170,14 @@ class SelfAttention(nn.Module):
         kv = kv.transpose(1,2)
         query = query.transpose(1,2)
         Q = self.split_last_dim(query, self.num_head)
-        K, V = [self.split_last_dim(tensor, self.num_head) for tensor in torch.split(memory, self.d_model, dim=2)]
+        K, V = [self.split_last_dim(tensor, self.num_head) for tensor in torch.split(kv, self.d_model, dim=2)]
 
         key_depth_per_head = self.d_model // self.num_head
         Q *= key_depth_per_head**-0.5
-        x = self.dot_product_attention(Q, K, V, mask = mask)
+        x = self.dot_product_attention(Q, K, V, mask)
         return self.combine_last_two_dim(x.permute(0,2,1,3)).transpose(1, 2)
 
-    def dot_product_attention(self, Q, K, V, mask):
+    def dot_product_attention(self, q, k ,v, mask):
         logits = torch.matmul(q, k.permute(0,1,3,2))
         shapes = [x  if x != None else -1 for x in list(logits.size())]
         mask = mask.view(shapes[0], 1, 1, shapes[-1])
@@ -212,3 +216,100 @@ class SelfAttention(nn.Module):
         ret = x.contiguous().view(new_shape)
         return ret
         
+
+def PositionEncoder(x, min_timescale=1.0, max_timescale=1.0e4):
+    """
+    Returns the position relative to a sinusoidal wave at varying frequency
+    """
+    x = x.transpose(1, 2)
+    length = x.size()[1]
+    channels = x.size()[2]
+    signal = get_timing_signal(length, channels, min_timescale, max_timescale)
+    return (x + signal).transpose(1, 2)
+
+
+def get_timing_signal(length, channels,
+                      min_timescale=1.0, max_timescale=1.0e4):
+    position = torch.arange(length).type(torch.float32)
+    num_timescales = channels // 2
+    log_timescale_increment = (math.log(float(max_timescale) / float(min_timescale)) / (float(num_timescales) - 1))
+    inv_timescales = min_timescale * torch.exp(
+            torch.arange(num_timescales).type(torch.float32) * -log_timescale_increment)
+    scaled_time = position.unsqueeze(1) * inv_timescales.unsqueeze(0)
+    
+    signal = torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim = 1)
+    m = nn.ZeroPad2d((0, (channels % 2), 0, 0))
+    signal = m(signal)
+    signal = signal.view(1, length, channels)
+    return signal
+    
+class Encoder(nn.Module):
+    """
+    Encoder structure specified in the QANet implementation
+
+    Args:
+         num_conv (int): number of depthwise convlutional layers
+         d_model (int): size of model embedding
+         num_head (int): number of attention-heads
+         k (int): kernel size for convolutional layers
+         dropout (float): layer dropout probability
+    """
+
+    def __init__(self, num_conv, d_model, num_head, k, dropout = 0.1):
+        super(Encoder, self).__init__()
+        self.convs = nn.ModuleList([DepthwiseSeperableConv(d_model, d_model, k) for _ in range(num_conv)])
+        self.conv_norms = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(num_conv)])
+
+        self.att = SelfAttention(d_model, num_head, dropout = dropout)
+        self.FFN_1 = Initialized_Conv1d(d_model, d_model, relu=True, bias=True)
+        self.FFN_2 = Initialized_Conv1d(d_model, d_model, bias=True)
+        self.norm_1 = nn.LayerNorm(d_model)
+        self.norm_2 = nn.LayerNorm(d_model)
+        self.num_conv = num_conv
+        self.dropout = dropout
+
+    def forward(self, x, mask, l, blks):
+        """
+        dropout probability: uses stochastic depth survival probability = 1 - (l/L)*pL, 
+        reference here: https://arxiv.org/pdf/1603.09382.pdf 
+        Question: uhhh you drop the whole layer?, and you apply dropout twice each other layer?
+        """
+        total_layers = (self.num_conv + 1) * blks
+        out = PositionEncoder(x)
+        dropout = self.dropout
+
+        for i, conv in enumerate(self.convs):
+            res = out
+            out = self.conv_norms[i](out.transpose(1,2)).transpose(1,2)
+            if(i) % 2 == 0:
+                out = F.dropout(out, p=dropout)
+            if (i) % 2 == 0:
+                out = F.dropout(out, p=dropout, training=self.training)
+            out = conv(out)
+            out = self.res_drop(out, res, dropout*float(l)/total_layers)
+            l += 1
+
+        res = out
+        out = self.norm_1(out.transpose(1,2)).transpose(1,2)
+        out = F.dropout(out, p=dropout, training=self.training)
+        out = self.att(out, mask)
+        out = self.res_drop(out, res, dropout*float(l)/total_layers)
+        l += 1
+        res = out
+
+        out = self.norm_2(out.transpose(1,2)).transpose(1,2)
+        out = F.dropout(out, p=dropout, training=self.training)
+        out = self.FFN_1(out)
+        out = self.FFN_2(out)
+        out = self.res_drop(out, res, dropout*float(l)/total_layers)
+        return out
+
+        
+    def res_drop(self, x, res, drop):
+        if self.training == True:
+           if torch.empty(1).uniform_(0,1) < drop:
+               return res
+           else:
+               return F.dropout(x, drop, training=self.training) + res
+        else:
+            return x + res
