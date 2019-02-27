@@ -360,3 +360,17 @@ class CQAttention(nn.Module):
         res = subres0 + subres1 + subres2
         res += self.bias
         return res        
+
+class QAOutput(nn.Module):
+    def __init__(self, hidden_size):
+        super(QAOutput, self).__init__()
+        self.w1 = Initialized_Conv1d(hidden_size*2, 1)
+        self.w2 = Initialized_Conv1d(hidden_size*2, 1)
+
+    def forward(self, M1, M2, M3, mask):
+        X1 = torch.cat([M1, M2], dim=1)
+        X2 = torch.cat([M1, M3], dim=1)
+        Y1 = mask_logits(self.w1(X1).squeeze(), mask)
+        Y2 = mask_logits(self.w2(X2).squeeze(), mask)
+        return Y1, Y2
+        
