@@ -17,7 +17,7 @@ import util
 from args import get_train_args
 from collections import OrderedDict
 from json import dumps
-from models import BiDAF
+from models import QANet
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
 from ujson import load as json_load
@@ -43,4 +43,18 @@ def main(args):
     # Args:  word_vectors: word vector tensor of dimension [vocab_size * wemb_dim]
     log.info('Loading embeddings...')
     word_vectors = util.torch_from_json(args.word_emb_file)
+    char_vectors = util.torch_from_json(args.char_emb_file)
+
+    # Get Model
+    log.info('Building Model...')
+    model = QANet(word_vectors,
+                  char_vectors,
+                  args.para_limit,
+                  args.ques_limit,
+                  args.f_model,
+                  num_head=args.num_head,
+                  train_cemb = (not args.pretrained_char))
+
     
+if __name__ == '__main__':
+    main(get_train_args())

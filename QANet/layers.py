@@ -76,13 +76,15 @@ class Embedding(nn.Module):
     Uses two-layer highway network (Srivastava 2015) 
 
     Note: Dropout was used on character_word embeddings and between layers, specified as 0.1 and 0.05 respectively
+
+    Question: Linear/Conv1d layer right before highway
     """
 
     def __init__(self, p1, p2, hidden_size, dropout_w = 0.1, dropout_c = 0.05):
         super(Embedding, self).__init__()
-        self.conv2d = nn.Conv2d(cemb_dim, hidden_size, kernel_size = (1,5), padding=0, bias=True)
+        self.conv2d = nn.Conv2d(p2, hidden_size, kernel_size = (1,5), padding=0, bias=True)
         nn.init.kaiming_normal_(self.conv2d.weight, nonlinearity='relu')
-        self.conv1d = Initialized_Conv1d(wemb_dim + hidden_size, hidden_size, bias=False)
+        self.conv1d = Initialized_Conv1d(p1 + hidden_size, hidden_size, bias=False)
         self.high = HighwayEncoder(2, hidden_size)
         self.dropout_w = dropout_w
         self.dropout_c = dropout_c
@@ -102,5 +104,23 @@ class Embedding(nn.Module):
         emb = self.high(emb)
         return emb
 
+class DepthwiseSeperableConv(nn.Module):
+    """
+    Performs a depthwise seperable convolution
+    First you should only convolve over each input channel individually, afterwards you convolve the input channels via inx1x1 to get the number of output channels
+    This method conserves memory
+    
+    For clarification see the following: 
+    https://towardsdatascience.com/types-of-convolutions-in-deep-learning-717013397f4d
+    https://arxiv.org/abs/1706.03059
 
+    Question: Padding in depthwise_convolution
+    """
+    def __init__(self, in_channel, out_channel, k, bias=True):
+        super(DepthwiseSeperableConv, self).__init__()
+        self.depthwise_conv = nn.conv1d(in_channels=in_channel, out_channels=in_channel, kernel_size = k, groups = in_channels, padding = k//2, bias = False)
+        self.pointwise_conv = nn.conv1d(in_channels=in_channel, out_channels=out_channel, kernel_size = 1, bias=bias)
+
+    def forward(self, input):
+        return F.relu(self.pointwise_conv(self.depthwise_conv(input)))
 

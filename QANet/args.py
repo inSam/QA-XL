@@ -79,7 +79,6 @@ def get_setup_args():
                         type=lambda s: s.lower().startswith('t'),
                         default=True,
                         help='Process examples from the test set')
-
     args = parser.parse_args()
 
     return args
@@ -133,7 +132,23 @@ def get_train_args():
                         type=float,
                         default=0.999,
                         help='Decay rate for exponential moving average of parameters.')
-
+    parser.add_argument('--f_model',
+                        default=128, type=int,
+                        help='model hidden size/filter size')
+    parser.add_argument('--num_head',
+                        default=8, type=int,
+                        help='attention num head')
+    parser.add_argument('--pretrained_char',
+                        default=False, action='store_true',
+                        help='whether train char embedding or not')
+    parser.add_argument('--para_limit',
+                        type=int,
+                        default=400,
+                        help='Max number of words in a paragraph')
+    parser.add_argument('--ques_limit',
+                        type=int,
+                        default=50,
+                        help='Max number of words to keep from a question')
     args = parser.parse_args()
 
     if args.metric_name == 'NLL':
