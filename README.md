@@ -7,9 +7,9 @@ QANet with Transformer-XL: Squad 2.0 Question and Answer Natural Language Model
   * numpy
   * pip
   * spacy=2.0.16
-  * [x] tensorboard
-  * [x] tensorflow
-  * [x] tensorboardX
+  * [] tensorboard
+  * [] tensorflow
+  * [] tensorboardX
   * tqdm
   * urllib3
   * pytorch=1.0.0
