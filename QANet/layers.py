@@ -44,6 +44,10 @@ class HighwayEncoder(nn.Module):
 
     
 class Initialized_Conv1d(nn.Module):
+    """
+    Wrapper Function
+    Initializes nn.conv1d and adds a relu output.
+    """
     def __init__(self, in_channels, out_channels,
                  kernel_size=1, stride=1, padding=0, groups=1,
                  relu=False, bias=False):
@@ -77,7 +81,7 @@ class Embedding(nn.Module):
 
     Note: Dropout was used on character_word embeddings and between layers, specified as 0.1 and 0.05 respectively
 
-    Question: Linear/Conv1d layer right before highway
+    Question: Linear/Conv1d layer before or after highway?
     """
 
     def __init__(self, p1, p2, hidden_size, dropout_w = 0.1, dropout_c = 0.05):
@@ -114,6 +118,12 @@ class DepthwiseSeperableConv(nn.Module):
     https://towardsdatascience.com/types-of-convolutions-in-deep-learning-717013397f4d
     https://arxiv.org/abs/1706.03059
 
+
+    Args:
+         in_channel (int): input channel
+         out_channel (int): output channel
+         k (int): kernel size
+
     Question: Padding in depthwise_convolution
     """
     def __init__(self, in_channel, out_channel, k, bias=True):
@@ -124,3 +134,81 @@ class DepthwiseSeperableConv(nn.Module):
     def forward(self, input):
         return F.relu(self.pointwise_conv(self.depthwise_conv(input)))
 
+
+def mask_logits(target, mask):
+    mask = mask.type(torch.float32)
+    return target * mask + (1 - mask) * (-1e30)
+
+
+class SelfAttention(nn.Module):
+    """
+    Implements the self-attention mechanism used in QANet. 
+
+    Using the same implementation in "Attention" is all you need, we set value_dim = key_dim = d_model / num_head
+
+    See references here: 
+    https://arxiv.org/pdf/1706.03762.pdf
+    https://lilianweng.github.io/lil-log/2018/06/24/attention-attention.html#multi-head-self-attention
+
+    Question: Do I use bias in the linear layers? 
+    """
+    def __init__(self, d_model, num_head, dropout=0.1):
+        super(selfAttention, self).__init__()
+        self.d_model = d_model
+        self.dropout = dropout
+        self.num_head = num_head
+        self.kv_conv = Initialized_Conv1d(in_channels=d_model, out_channels=d_model*2, kernel_size=1, relu=False, bias=False)
+        self.query_conv = Initialized_Conv1d(in_channels=d_model, out_channels=d_model, kernel_size=1, relu=False, bias=False)
+
+    def forward(self, x, mask):
+        kv = self.kv_conv(x)
+        query = self.query_conv(x)
+        kv = kv.transpose(1,2)
+        query = query.transpose(1,2)
+        Q = self.split_last_dim(query, self.num_head)
+        K, V = [self.split_last_dim(tensor, self.num_head) for tensor in torch.split(memory, self.d_model, dim=2)]
+
+        key_depth_per_head = self.d_model // self.num_head
+        Q *= key_depth_per_head**-0.5
+        x = self.dot_product_attention(Q, K, V, mask = mask)
+        return self.combine_last_two_dim(x.permute(0,2,1,3)).transpose(1, 2)
+
+    def dot_product_attention(self, Q, K, V, mask):
+        logits = torch.matmul(q, k.permute(0,1,3,2))
+        shapes = [x  if x != None else -1 for x in list(logits.size())]
+        mask = mask.view(shapes[0], 1, 1, shapes[-1])
+        logits = mask_logits(logits, mask)
+        
+        weights = F.softmax(logits, dim=-1)
+        weights = F.dropout(weights, p=self.dropout, training=self.training)
+        return torch.matmul(weights, v)        
+        
+
+    def split_last_dim(self, x, n):
+        """Reshape x so that the last dimension becomes two dimensions.
+        The first of these two dimensions is n.
+        Args:
+        x: a Tensor with shape [..., m]
+        n: an integer.
+        Returns:
+        a Tensor with shape [..., n, m/n]
+        """
+        old_shape = list(x.size())
+        last = old_shape[-1]
+        new_shape = old_shape[:-1] + [n] + [last // n if last else None]
+        ret = x.view(new_shape)
+        return ret.permute(0, 2, 1, 3)
+
+    def combine_last_two_dim(self, x):
+        """Reshape x so that the last two dimension become one.
+        Args:
+        x: a Tensor with shape [..., a, b]
+        Returns:
+        a Tensor with shape [..., ab]
+        """
+        old_shape = list(x.size())
+        a, b = old_shape[-2:]
+        new_shape = old_shape[:-2] + [a * b if a and b else None]
+        ret = x.contiguous().view(new_shape)
+        return ret
+        
