@@ -8,6 +8,7 @@ Author:
 import layers
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 import layers
 
@@ -41,13 +42,17 @@ class QANet(nn.Module):
         self.LC = context_max_len
         self.LQ = query_max_len
         self.num_head = num_head
-        self.pad = pad;
+        self.pad = pad
+        self.dropout = dropout
         
         wemb_dim = word_vectors.size()[1]
         cemb_dim = char_vectors.size()[1]
-        print("Word vector dim-%d, Char vector dim-%d" % (wemb_dim, cemb_dim))
+        #print("Word vector dim-%d, Char vector dim-%d" % (wemb_dim, cemb_dim))
         self.emb = layers.Embedding(wemb_dim, cemb_dim, d_model)
         self.emb_enc = layers.Encoder(num_conv=4, d_model=d_model, num_head=num_head, k=7, dropout=0.1)
+        self.cq_att = layers.CQAttention(d_model=d_model)
+        self.cq_resizer = layers.Initialized_Conv1d(d_model * 4, d_model) #Foward layer to reduce dimension of cq_att output back to d_dim
+        self.model_enc_blks = nn.ModuleList([layers.Encoder(num_conv=2, d_model=d_model, num_head=num_head, k=5, dropout=0.1) for _ in range(7)])
 
     def forward(self, Cword, Cchar, Qword, Qchar):
         """
@@ -62,7 +67,20 @@ class QANet(nn.Module):
         C, Q = self.emb(Cc, Cw, self.LC), self.emb(Qc, Qw, self.LQ)
         Ce = self.emb_enc(C, maskC, 1, 1)
         Qe = self.emb_enc(Q, maskQ, 1, 1)
-
+        X = self.cq_att(Ce, Qe, maskC, maskQ)
+        M0 = self.cq_resizer(X)
+        M0 = F.dropout(M0, p=self.dropout, training=self.training)
+        
+        for i, blk in enumerate(self.model_enc_blks):
+             M0 = blk(M0, maskC, i*(2+2)+1, 7)
+        M1 = M0
+        for i, blk in enumerate(self.model_enc_blks):
+             M0 = blk(M0, maskC, i*(2+2)+1, 7)
+        M2 = M0
+        M0 = F.dropout(M0, p=self.dropout, training=self.training)
+        for i, blk in enumerate(self.model_enc_blks):
+             M0 = blk(M0, maskC, i*(2+2)+1, 7)
+        M3 = M0
 
 if __name__ == "__main__":
     torch.manual_seed(12)
