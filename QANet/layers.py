@@ -225,7 +225,7 @@ def PositionEncoder(x, min_timescale=1.0, max_timescale=1.0e4):
     length = x.size()[1]
     channels = x.size()[2]
     signal = get_timing_signal(length, channels, min_timescale, max_timescale)
-    return (x + signal).transpose(1, 2)
+    return (x + signal.to(x.get_device())).transpose(1, 2)
 
 
 def get_timing_signal(length, channels,
@@ -372,5 +372,7 @@ class QAOutput(nn.Module):
         X2 = torch.cat([M1, M3], dim=1)
         Y1 = mask_logits(self.w1(X1).squeeze(), mask)
         Y2 = mask_logits(self.w2(X2).squeeze(), mask)
-        return Y1, Y2
+        p1 = F.log_softmax(Y1, dim=1)
+        p2 = F.log_softmax(Y2, dim=1)        
+        return p1, p2
         

@@ -97,8 +97,14 @@ def get_train_args():
                         help='Number of steps between successive evaluations.')
     parser.add_argument('--lr',
                         type=float,
-                        default=0.5,
+                        default=0.001,
                         help='Learning rate.')
+    parser.add_argument('--beta1',
+                        default=0.8, type=float,
+                        help='beta 1')
+    parser.add_argument('--beta2',
+                        default=0.999, type=float,
+                        help='beta 2')    
     parser.add_argument('--l2_wd',
                         type=float,
                         default=0,
@@ -109,7 +115,7 @@ def get_train_args():
                         help='Number of epochs for which to train. Negative means forever.')
     parser.add_argument('--drop_prob',
                         type=float,
-                        default=0.2,
+                        default=0.1,
                         help='Probability of zeroing an activation in dropout layers.')
     parser.add_argument('--metric_name',
                         type=str,
@@ -149,6 +155,9 @@ def get_train_args():
                         type=int,
                         default=50,
                         help='Max number of words to keep from a question')
+    parser.add_argument('--lr_warm_up_num',
+                        default=1000, type=int,
+                        help='number of warm-up steps of learning rate')    
     args = parser.parse_args()
 
     if args.metric_name == 'NLL':
@@ -238,7 +247,7 @@ def add_train_test_args(parser):
                         help='Base directory for saving information.')
     parser.add_argument('--batch_size',
                         type=int,
-                        default=64,
+                        default=12,
                         help='Batch size per GPU. Scales automatically when \
                               multiple GPUs are available.')
     parser.add_argument('--use_squad_v2',
