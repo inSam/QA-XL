@@ -86,6 +86,8 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         self.r_net = nn.Linear(self.d_model, self.n_head * self.d_head, bias=False)
 
     def forward(self, w, r, r_w_bias, r_r_bias, attn_mask=None, mems=None):
+        w = w.permute(2, 0, 1)
+        print(w.size())
         qlen, rlen, bsz = w.size(0), r.size(0), w.size(1)
 
         if mems is not None:
@@ -350,31 +352,6 @@ class PositionalEmbedding(nn.Module):
         else:
             return pos_emb[:,None,:]
     
-def PositionEncoder(x, min_timescale=1.0, max_timescale=1.0e4):
-    """
-    Returns the position relative to a sinusoidal wave at varying frequency
-    """
-    x = x.transpose(1, 2)
-    length = x.size()[1]
-    channels = x.size()[2]
-    signal = get_timing_signal(length, channels, min_timescale, max_timescale)
-    return (x + signal.to(x)).transpose(1, 2)
-
-
-def get_timing_signal(length, channels,
-                      min_timescale=1.0, max_timescale=1.0e4):
-    position = torch.arange(length).type(torch.float32)
-    num_timescales = channels // 2
-    log_timescale_increment = (math.log(float(max_timescale) / float(min_timescale)) / (float(num_timescales) - 1))
-    inv_timescales = min_timescale * torch.exp(
-            torch.arange(num_timescales).type(torch.float32) * -log_timescale_increment)
-    scaled_time = position.unsqueeze(1) * inv_timescales.unsqueeze(0)
-    
-    signal = torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim = 1)
-    m = nn.ZeroPad2d((0, (channels % 2), 0, 0))
-    signal = m(signal)
-    signal = signal.view(1, length, channels)
-    return signal
     
 class Encoder(nn.Module):
     """
@@ -394,22 +371,20 @@ class Encoder(nn.Module):
         self.conv_norms = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(num_conv)])
         
         self.att = RelPartialLearnableMultiHeadAttn(n_head, d_model, d_head, dropout, pre_lnorm = True)
-        #self.FFN_1 = Initialized_Conv1d(d_model, d_model, relu=True, bias=True)
-        #self.FFN_2 = Initialized_Conv1d(d_model, d_model, bias=True)
         self.norm_1 = nn.LayerNorm(d_model)
-        #self.norm_2 = nn.LayerNorm(d_model)
         self.FF = PositionWiseFF(d_model, d_model * 4, dropout, p_norm = True) #NEEDS TO BE UPDATED inner_model
         self.num_conv = num_conv
         self.dropout = dropout
         #self.pos_emb = PositionalEmbedding(d_model)
 
-    def forward(self, x, mask, l, blks):
+    def forward(self, x, l, blks, r, r_w_bias, r_r_bias, dec_attn_mask=None, mems=None):
         """
         dropout probability: uses stochastic depth survival probability = 1 - (l/L)*pL, 
         reference here: https://arxiv.org/pdf/1603.09382.pdf 
-        Question: uhhh you drop the whole layer apparently, and you apply dropout twice for each other layer?
         """
         total_layers = (self.num_conv + 1) * blks
+        bsz, d_model, seq_len = x.size()
+        
         out = PositionEncoder(x)
         dropout = self.dropout
 
@@ -425,10 +400,13 @@ class Encoder(nn.Module):
             l += 1
 
         res = out
-        print(out.size())
+        #print(out.size())
         #out = self.norm_1(out.transpose(1,2)).transpose(1,2)
         #out = F.dropout(out, p=dropout, training=self.training)
-        out = self.att(out, mask)
+        
+        
+        out = self.att(out, r, r_w_bias, r_r_bias, attn_mask=dec_attn_mask, mems=mems)
+        out = out.permute(1,2, 0)
         out = self.res_drop(out, res, dropout*float(l)/total_layers)
         l += 1
         out = out.transpose(1,2)
@@ -438,6 +416,8 @@ class Encoder(nn.Module):
         #out = F.dropout(out, p=dropout, training=self.training)
         #out = self.FFN_1(out)
         #out = self.FFN_2(out)
+
+
         out = self.FF(out)
         out = self.res_drop(out, res, dropout*float(l)/total_layers)
         out = out.transpose(1,2)
@@ -445,6 +425,9 @@ class Encoder(nn.Module):
 
         
     def res_drop(self, x, res, drop):
+        """
+        Layer-dropout with residual addition
+        """
         if self.training == True:
            if torch.empty(1).uniform_(0,1) < drop:
                return res

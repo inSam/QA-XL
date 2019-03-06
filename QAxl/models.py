@@ -28,7 +28,7 @@ class QANet(nn.Module):
     """
 
     def __init__(self, word_vectors, char_vectors, context_max_len, query_max_len,
-                 d_model, d_head, mem_len = 0, train_cemb = False, pad=0, dropout=0.1, num_head = 8):
+                 d_model, d_head, mem_len = 0, same_length = False, clamp_len = -1, train_cemb = False, pad=0, dropout=0.1, num_head = 8):
         """
         """
         super(QANet, self).__init__()
@@ -46,6 +46,11 @@ class QANet(nn.Module):
         self.dropout = dropout
         self.mem_len = mem_len
         self.d_head = d_head
+        self.d_model = d_model
+        self.num_head = num_head
+        self.same_length = same_length
+        self.clamp_len = clamp_len
+        self.ext_len = 0
         
         wemb_dim = word_vectors.size()[1]
         cemb_dim = char_vectors.size()[1]
@@ -58,19 +63,20 @@ class QANet(nn.Module):
         self.cq_resizer = layers.Initialized_Conv1d(d_model * 4, d_model) #Foward layer to reduce dimension of cq_att output back to d_dim
         self.model_enc_blks = nn.ModuleList([layers.Encoder(2, num_head, d_model, d_head, d_inner = d_model * 4, k=5, dropout=0.1) for _ in range(7)])
         self.out = layers.QAOutput(d_model)
+        self.drop = nn.Dropout(dropout)
 
         self._create_parameters()
 
     def _create_parameters(self):
             self.pos_emb = layers.PositionalEmbedding(self.d_model)
-            self.r_w_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
-            self.r_r_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))        
+            self.r_w_bias = nn.Parameter(torch.Tensor(self.num_head, self.d_head))
+            self.r_r_bias = nn.Parameter(torch.Tensor(self.num_head, self.d_head))        
 
     def init_mems(self):
         if self.mem_len > 0:
             mems = []
             param = next(self.parameters())
-            for i in range(self.n_layer+1):
+            for i in range(5):
                 empty = torch.empty(0, dtype=param.dtype, device=param.device)
                 mems.append(empty)
 
@@ -99,16 +105,13 @@ class QANet(nn.Module):
                 cat = torch.cat([mems[i], hids[i]], dim=0)
                 new_mems.append(cat[beg_idx:end_idx].detach())
 
-        return new_mems
+            return new_mems
 
-
-    def _forward(self, dec_inp, mems=None):
-        qlen, bsz = dec_inp.size()
-
-        word_emb = self.word_emb(dec_inp)
-
+    def _forward(self, word_emb, mem_idx, mems=None):
+        bsz, d_model, qlen = word_emb.size()
         mlen = mems[0].size(0) if mems is not None else 0
         klen = mlen + qlen
+        
         if self.same_length:
             all_ones = word_emb.new_ones(qlen, klen)
             mask_len = klen - self.mem_len
@@ -134,32 +137,37 @@ class QANet(nn.Module):
         pos_emb = self.drop(pos_emb)
 
         hids.append(core_out)
-        for i, layer in enumerate(self.layers):
-            mems_i = None if mems is None else mems[i]
-            core_out = layer(core_out, pos_emb, self.r_w_bias,
-                    self.r_r_bias, dec_attn_mask=dec_attn_mask, mems=mems_i)
-            hids.append(core_out)
+
+        mems_i = None if mems is None else mems[3]
+        core_out = self.emb_enc(core_out, 1, 1, pos_emb, self.r_w_bias, self.r_r_bias, dec_attn_mask=dec_attn_mask, mems=mems_i)
+        hids.append(core_out)
 
         core_out = self.drop(core_out)
 
-        new_mems = self._update_mems(hids, mems, mlen, qlen)
+        new_mems = self._update_mems(hids, mems, mlen, qlen, mem_idx)
 
         return core_out, new_mems
     
         
-    def forward(self, Cword, Cchar, Qword, Qchar):
+    def forward(self, Cword, Cchar, Qword, Qchar, *mems):
         """
         """
-        maskC = (torch.ones_like(Cword) *
-                 self.pad != Cword).float()
-        maskQ = (torch.ones_like(Qword) *
-                 self.pad != Qword).float()
+        # maskC = (torch.ones_like(Cword) *
+        #          self.pad != Cword).float()
+        # maskQ = (torch.ones_like(Qword) *
+        #          self.pad != Qword).float()
+        if not mems: mems = self.init_mems()
         
         Cw, Cc = self.word_emb(Cword), self.char_emb(Cchar)
         Qw, Qc = self.word_emb(Qword), self.char_emb(Qchar)
         C, Q = self.emb(Cc, Cw, self.LC), self.emb(Qc, Qw, self.LQ)
-        Ce = self.emb_enc(C, maskC, 1, 1)
-        Qe = self.emb_enc(Q, maskQ, 1, 1)
+        print(C.size())
+        print(Q.size())
+        #hiddenC, mems = self._forward(C, [0,2], mems=mems)
+        #hiddenQ, mems = self._forward(Q, [1,2], mems=mems)
+
+        #Ce = self.emb_enc(C, maskC, 1, 1, self.r_w_bias, self.r_r_bias)
+        #Qe = self.emb_enc(Q, maskQ, 1, 1)
         # X = self.cq_att(Ce, Qe, maskC, maskQ)
         # M0 = self.cq_resizer(X)
         # M0 = F.dropout(M0, p=self.dropout, training=self.training)
@@ -221,9 +229,10 @@ if __name__ == "__main__":
                 1, cemb_vocab_size)
 
     qanet = QANet(wv_tensor, cv_tensor,
-                  c_max_len, q_max_len, d_model, d_head, mem_len=mem_len, train_cemb=False, num_head=num_head)
+                  c_max_len, q_max_len, d_model, d_head, same_length = False,mem_len=mem_len, clamp_len = -1, train_cemb=False, num_head=num_head)
+    mems = tuple()
     qanet(context_wids, context_cids,
-                       question_wids, question_cids)    
+                       question_wids, question_cids, *mems)    
     # p1, p2 = qanet(context_wids, context_cids,
     #                    question_wids, question_cids)
     # print(p1.shape)
