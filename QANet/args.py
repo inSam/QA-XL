@@ -266,3 +266,20 @@ def add_train_test_args(parser):
                         type=str,
                         default=None,
                         help='Path to load as a model checkpoint.')
+    parser.add_argument('--test_para_limit',
+                        type=int,
+                        default=1000,
+                        help='Max number of words in a paragraph at test time')
+    parser.add_argument('--test_ques_limit',
+                        type=int,
+                        default=100,
+                        help='Max number of words in a question at test time')    
+    parser.add_argument('--f_model',
+                        default=128, type=int,
+                        help='model hidden size/filter size')
+    parser.add_argument('--num_head',
+                        default=8, type=int,
+                        help='attention num head')
+    parser.add_argument('--pretrained_char',
+                        default=False, action='store_true',
+                        help='whether train char embedding or not')
