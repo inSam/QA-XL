@@ -11,6 +11,74 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class SelfAttention(nn.Module):
+    """
+    Implements the self-attention mechanism used in QANet. 
+    Using the same implementation in "Attention" is all you need, we set value_dim = key_dim = d_model / num_head
+    See references here: 
+    https://arxiv.org/pdf/1706.03762.pdf
+    https://lilianweng.github.io/lil-log/2018/06/24/attention-attention.html#multi-head-self-attention
+    Question: Do I use bias in the linear layers? 
+    """
+    def __init__(self, d_model, num_head, dropout=0.1):
+        super(SelfAttention, self).__init__()
+        self.d_model = d_model
+        self.dropout = dropout
+        self.num_head = num_head
+        self.kv_conv = Initialized_Conv1d(in_channels=d_model, out_channels=d_model*2, kernel_size=1, relu=False, bias=False)
+        self.query_conv = Initialized_Conv1d(in_channels=d_model, out_channels=d_model, kernel_size=1, relu=False, bias=False)
+
+    def forward(self, x, mask):
+        kv = self.kv_conv(x)
+        query = self.query_conv(x)
+        kv = kv.transpose(1,2)
+        query = query.transpose(1,2)
+        Q = self.split_last_dim(query, self.num_head)
+        K, V = [self.split_last_dim(tensor, self.num_head) for tensor in torch.split(kv, self.d_model, dim=2)]
+
+        key_depth_per_head = self.d_model // self.num_head
+        Q *= key_depth_per_head**-0.5
+        x = self.dot_product_attention(Q, K, V, mask)
+        return self.combine_last_two_dim(x.permute(0,2,1,3)).transpose(1, 2)
+
+    def dot_product_attention(self, q, k ,v, mask):
+        logits = torch.matmul(q, k.permute(0,1,3,2))
+        shapes = [x  if x != None else -1 for x in list(logits.size())]
+        mask = mask.view(shapes[0], 1, 1, shapes[-1])
+        logits = mask_logits(logits, mask)
+        
+        weights = F.softmax(logits, dim=-1)
+        weights = F.dropout(weights, p=self.dropout, training=self.training)
+        return torch.matmul(weights, v)        
+        
+
+    def split_last_dim(self, x, n):
+        """Reshape x so that the last dimension becomes two dimensions.
+        The first of these two dimensions is n.
+        Args:
+        x: a Tensor with shape [..., m]
+        n: an integer.
+        Returns:
+        a Tensor with shape [..., n, m/n]
+        """
+        old_shape = list(x.size())
+        last = old_shape[-1]
+        new_shape = old_shape[:-1] + [n] + [last // n if last else None]
+        ret = x.view(new_shape)
+        return ret.permute(0, 2, 1, 3)
+
+    def combine_last_two_dim(self, x):
+        """Reshape x so that the last two dimension become one.
+        Args:
+        x: a Tensor with shape [..., a, b]
+        Returns:
+        a Tensor with shape [..., ab]
+        """
+        old_shape = list(x.size())
+        a, b = old_shape[-2:]
+        new_shape = old_shape[:-2] + [a * b if a and b else None]
+        ret = x.contiguous().view(new_shape)
+        return ret
 
 class RelMultiHeadAttn(nn.Module):
     def __init__(self, n_head, d_model, d_head, dropout, dropatt=0, pre_lnorm = True):
@@ -85,7 +153,7 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
 
         self.r_net = nn.Linear(self.d_model, self.n_head * self.d_head, bias=False)
 
-    def forward(self, w, r, r_w_bias, r_r_bias, attn_mask=None, mems=None):
+    def forward(self, w, mask, r, r_w_bias, r_r_bias, attn_mask=None, mems=None):
         w = w.permute(2, 0, 1)
         #print(w.size())
         qlen, rlen, bsz = w.size(0), r.size(0), w.size(1)
@@ -129,6 +197,13 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         attn_score = AC + BD
         attn_score.mul_(self.scale)
 
+        sizes = mask.size()
+        mask = mask.unsqueeze(-1).unsqueeze(-1)
+        mask = mask.permute(0, 2, 3, 1)
+        attn_score = attn_score.permute(2, 3, 1, 0)
+        attn_score = mask_logits(attn_score, mask)
+        attn_score = attn_score.permute(3, 2, 0, 1)
+                
         #### compute attention probability
         if attn_mask is not None and attn_mask.any().item():
             if attn_mask.dim() == 2:
@@ -155,10 +230,12 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
 
         if self.pre_lnorm:
             ##### residual connection
-            output = w + attn_out
+            #output = w + attn_out
+            output = attn_out
         else:
             ##### residual connection + layer normalization
             output = self.layer_norm(w + attn_out)
+            output = self.layer_norm(attn_out)
 
         return output
 
@@ -167,7 +244,7 @@ class HighwayEncoder(nn.Module):
     Edits: An dropout layer with p=0.1 was added
 
     Encode an input sequence using a highway network.
-    Based on the paper:
+!    Based on the paper:
     "Highway Networks"
     by Rupesh Kumar Srivastava, Klaus Greff, Jürgen Schmidhuber
     (https://arxiv.org/abs/1505.00387).
@@ -225,13 +302,14 @@ class PositionWiseFF(nn.Module):
         self.layer_norm = nn.LayerNorm(d_model)
 
     def forward(self, inp):
-        if self.lnorm: 
-            FFout = self.FF(self.layer_norm(inp)) #layer norm + position-wise FF
-            return FFout + inp #residual connection
-        else:
-            FFout = self.FF(inp) #position-wise FF
-            FFout = self.layer_norm(inp + FFout) #layer norm + residual connection
-            return FFout
+        return self.FF(inp)
+        # if self.lnorm: 
+        #     FFout = self.FF(self.layer_norm(inp)) #layer norm + position-wise FF
+        #     return FFout #residual connection
+        # else:
+        #     FFout = self.FF(inp) #position-wise FF
+        #     FFout = self.layer_norm(FFout) #layer norm + residual connection
+        #     return FFout
             
 
     
@@ -371,13 +449,17 @@ class Encoder(nn.Module):
         self.conv_norms = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(num_conv)])
         
         self.att = RelPartialLearnableMultiHeadAttn(n_head, d_model, d_head, dropout, pre_lnorm = True)
+        #self.att = SelfAttention(d_model, n_head, dropout = dropout)
         self.norm_1 = nn.LayerNorm(d_model)
+        self.norm_2 = nn.LayerNorm(d_model)        
         self.FF = PositionWiseFF(d_model, d_model * 4, dropout, p_norm = True) #NEEDS TO BE UPDATED inner_model
+        #self.FFN_1 = Initialized_Conv1d(d_model, d_model, relu=True, bias=True)
+        #self.FFN_2 = Initialized_Conv1d(d_model, d_model, bias=True)
         self.num_conv = num_conv
         self.dropout = dropout
         #self.pos_emb = PositionalEmbedding(d_model)
 
-    def forward(self, x, l, blks, r, r_w_bias, r_r_bias, dec_attn_mask=None, mems=None):
+    def forward(self, x, mask, l, blks, r, r_w_bias, r_r_bias, dec_attn_mask=None, mems=None):
         """
         dropout probability: uses stochastic depth survival probability = 1 - (l/L)*pL, 
         reference here: https://arxiv.org/pdf/1603.09382.pdf 
@@ -399,26 +481,25 @@ class Encoder(nn.Module):
 
         res = out
         #print(out.size())
-        #out = self.norm_1(out.transpose(1,2)).transpose(1,2)
-        #out = F.dropout(out, p=dropout, training=self.training)
+        out = self.norm_1(out.transpose(1,2)).transpose(1,2)
+        out = F.dropout(out, p=dropout, training=self.training)
+        #print(out)
         
-        
-        out = self.att(out, r, r_w_bias, r_r_bias, attn_mask=dec_attn_mask, mems=mems)
+        out = self.att(out, mask, r, r_w_bias, r_r_bias, attn_mask=dec_attn_mask, mems=mems)
         out = out.permute(1,2, 0)
+        #out = self.att(out, mask)
         out = self.res_drop(out, res, dropout*float(l)/total_layers)
         l += 1
-        out = out.transpose(1,2)
         res = out
-
-        #out = self.norm_2(out.transpose(1,2)).transpose(1,2)
-        #out = F.dropout(out, p=dropout, training=self.training)
+        
+        out = self.norm_2(out.transpose(1,2)).transpose(1,2)
+        out = F.dropout(out, p=dropout, training=self.training)
+        out = out.transpose(1,2)
         #out = self.FFN_1(out)
         #out = self.FFN_2(out)
-
-
         out = self.FF(out)
-        out = self.res_drop(out, res, dropout*float(l)/total_layers)
         out = out.transpose(1,2)
+        out = self.res_drop(out, res, dropout*float(l)/total_layers)
         return out
 
         

@@ -97,7 +97,7 @@ def get_train_args():
                         help='Number of steps between successive evaluations.')
     parser.add_argument('--lr',
                         type=float,
-                        default=0.001,
+                        default=0.00025,
                         help='Learning rate.')
     parser.add_argument('--beta1',
                         default=0.8, type=float,
@@ -147,6 +147,9 @@ def get_train_args():
     parser.add_argument('--num_head',
                         default=8, type=int,
                         help='attention num head')
+    parser.add_argument('--d_head',
+                        default=16, type=int,
+                        help='attention num head')
     parser.add_argument('--pretrained_char',
                         default=False, action='store_true',
                         help='whether train char embedding or not')
@@ -160,7 +163,21 @@ def get_train_args():
                         help='Max number of words to keep from a question')
     parser.add_argument('--lr_warm_up_num',
                         default=1000, type=int,
-                        help='number of warm-up steps of learning rate')    
+                        help='number of warm-up steps of learning rate')
+    parser.add_argument('--mem_len', type=int, default=256,
+                        help='length of the retained previous heads')
+    parser.add_argument('--init', default='normal', type=str,
+                        help='parameter initializer to use.')
+    parser.add_argument('--emb_init', default='normal', type=str,
+                        help='parameter initializer to use.')
+    parser.add_argument('--init_range', type=float, default=0.1,
+                        help='parameters initialized by U(-init_range, init_range)')
+    parser.add_argument('--emb_init_range', type=float, default=0.01,
+                        help='parameters initialized by U(-init_range, init_range)')
+    parser.add_argument('--init_std', type=float, default=0.02,
+                        help='parameters initialized by N(0, init_std)')
+    parser.add_argument('--proj_init_std', type=float, default=0.01,
+                        help='parameters initialized by N(0, init_std)')    
     args = parser.parse_args()
 
     if args.metric_name == 'NLL':
@@ -280,9 +297,3 @@ def add_train_test_args(parser):
     parser.add_argument('--f_model',
                         default=128, type=int,
                         help='model hidden size/filter size')
-    parser.add_argument('--num_head',
-                        default=8, type=int,
-                        help='attention num head')
-    parser.add_argument('--pretrained_char',
-                        default=False, action='store_true',
-                        help='whether train char embedding or not')

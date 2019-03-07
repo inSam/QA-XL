@@ -24,7 +24,56 @@ from tqdm import tqdm
 from ujson import load as json_load
 from util import collate_fn, SQuAD
 
+
 def main(args):
+###############################################################################
+# Build the model
+###############################################################################
+    def init_weight(weight):
+        nn.init.uniform_(weight, -args.init_range, args.init_range)
+
+    def init_bias(bias):
+        nn.init.constant_(bias, 0.0)
+
+    def weights_init(m):
+        classname = m.__class__.__name__
+        if classname.find('Linear') != -1:
+            if hasattr(m, 'weight') and m.weight is not None:
+                init_weight(m.weight)
+            if hasattr(m, 'bias') and m.bias is not None:
+                init_bias(m.bias)
+        elif classname.find('AdaptiveEmbedding') != -1:
+            if hasattr(m, 'emb_projs'):
+                for i in range(len(m.emb_projs)):
+                    if m.emb_projs[i] is not None:
+                        nn.init.normal_(m.emb_projs[i], 0.0, args.proj_init_std)
+        elif classname.find('Embedding') != -1:
+            if hasattr(m, 'weight'):
+                init_weight(m.weight)
+        elif classname.find('ProjectedAdaptiveLogSoftmax') != -1:
+            if hasattr(m, 'cluster_weight') and m.cluster_weight is not None:
+                init_weight(m.cluster_weight)
+            if hasattr(m, 'cluster_bias') and m.cluster_bias is not None:
+                init_bias(m.cluster_bias)
+            if hasattr(m, 'out_projs'):
+                for i in range(len(m.out_projs)):
+                    if m.out_projs[i] is not None:
+                        nn.init.normal_(m.out_projs[i], 0.0, args.proj_init_std)
+        elif classname.find('LayerNorm') != -1:
+            if hasattr(m, 'weight'):
+                nn.init.normal_(m.weight, 1.0, args.init_std)
+            if hasattr(m, 'bias') and m.bias is not None:
+                init_bias(m.bias)
+        elif classname.find('TransformerLM') != -1:
+            if hasattr(m, 'r_emb'):
+                init_weight(m.r_emb)
+            if hasattr(m, 'r_w_bias'):
+                init_weight(m.r_w_bias)
+            if hasattr(m, 'r_r_bias'):
+                init_weight(m.r_r_bias)
+            if hasattr(m, 'r_bias'):
+                init_bias(m.r_bias)
+    
     # Set up logging and devices
     args.save_dir = util.get_save_dir(args.save_dir, args.name, training=True)
     log = util.get_logger(args.save_dir, args.name)
@@ -53,6 +102,10 @@ def main(args):
                   args.para_limit,
                   args.ques_limit,
                   args.f_model,
+                  args.d_head,
+                  same_length = False, #Check back on this
+                  mem_len = args.mem_len,
+                  clamp_len = -1,
                   num_head=args.num_head,
                   train_cemb = (not args.pretrained_char))
     model = nn.DataParallel(model, args.gpu_ids)
@@ -62,6 +115,7 @@ def main(args):
         model, step = util.load_model(model, args.load_path, args.gpu_ids)
     else:
         step = 0
+        #model.apply(weights_init)
     model = model.to(device)
     model.train()
     ema = util.EMA(model, args.ema_decay)
@@ -95,18 +149,21 @@ def main(args):
                                    batch_size=args.batch_size,
                                    shuffle=True,
                                    num_workers=args.num_workers,
-                                   collate_fn=collate_fn)
+                                   collate_fn=collate_fn,
+                                   drop_last = True)
     dev_dataset = SQuAD(args.dev_record_file, args.use_squad_v2)
     dev_loader = data.DataLoader(dev_dataset,
                                  batch_size=args.batch_size,
                                  shuffle=False,
                                  num_workers=args.num_workers,
-                                 collate_fn=collate_fn)
+                                 collate_fn=collate_fn,
+                                 drop_last = True)
 
     # Train
     log.info('Training...')
     steps_till_eval = args.eval_steps
     epoch = step // len(train_dataset)
+    mems = (tuple(), tuple(), tuple())
     while epoch != args.num_epochs:
         epoch += 1
         log.info('Starting epoch {}...'.format(epoch))
@@ -124,7 +181,7 @@ def main(args):
                 optimizer.zero_grad()
 
                 # Forward
-                log_p1, log_p2 = model(cw_idxs, cc_idxs, qw_idxs, qc_idxs)
+                log_p1, log_p2, mems = model(cw_idxs, cc_idxs, qw_idxs, qc_idxs, *mems)
                 y1, y2 = y1.to(device), y2.to(device)
                 loss = torch.mean(loss_f(log_p1, y1) + loss_f(log_p2, y2))
                 loss_val = loss.item()
@@ -185,6 +242,7 @@ def evaluate(model, data_loader, device, eval_file, max_len, use_squad_v2):
     pred_dict = {}
     with open(eval_file, 'r') as fh:
         gold_dict = json_load(fh)
+    mems = (tuple(), tuple(), tuple())
     with torch.no_grad(), \
             tqdm(total=len(data_loader.dataset)) as progress_bar:
         for cw_idxs, cc_idxs, qw_idxs, qc_idxs, y1, y2, ids in data_loader:
@@ -197,7 +255,7 @@ def evaluate(model, data_loader, device, eval_file, max_len, use_squad_v2):
             batch_size = cw_idxs.size(0)
 
             # Forward
-            log_p1, log_p2 = model(cw_idxs, cc_idxs, qw_idxs, qc_idxs)
+            log_p1, log_p2, mems = model(cw_idxs, cc_idxs, qw_idxs, qc_idxs, *mems)
             y1, y2 = y1.to(device), y2.to(device)
             loss = torch.mean(loss_f(log_p1, y1) + loss_f(log_p2, y2))
             nll_meter.update(loss.item(), batch_size)

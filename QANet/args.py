@@ -274,12 +274,12 @@ def add_train_test_args(parser):
                         type=int,
                         default=100,
                         help='Max number of words in a question at test time')    
-    parser.add_argument('--f_model',
-                        default=128, type=int,
-                        help='model hidden size/filter size')
-    parser.add_argument('--num_head',
-                        default=8, type=int,
-                        help='attention num head')
-    parser.add_argument('--pretrained_char',
-                        default=False, action='store_true',
-                        help='whether train char embedding or not')
+    # parser.add_argument('--f_model',
+    #                     default=128, type=int,
+    #                     help='model hidden size/filter size')
+    # parser.add_argument('--num_head',
+    #                     default=8, type=int,
+    #                     help='attention num head')
+    # parser.add_argument('--pretrained_char',
+    #                     default=False, action='store_true',
+    #                     help='whether train char embedding or not')
