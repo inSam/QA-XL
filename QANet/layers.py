@@ -281,8 +281,6 @@ class Encoder(nn.Module):
         for i, conv in enumerate(self.convs):
             res = out
             out = self.conv_norms[i](out.transpose(1,2)).transpose(1,2)
-            if(i) % 2 == 0:
-                out = F.dropout(out, p=dropout)
             if (i) % 2 == 0:
                 out = F.dropout(out, p=dropout, training=self.training)
             out = conv(out)
