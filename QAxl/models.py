@@ -248,22 +248,7 @@ if __name__ == "__main__":
     question_cids = torch.zeros(batch_size, q_max_len, char_dim).long()
     context_lengths = torch.LongTensor(batch_size).random_(1, c_max_len)
     context_wids = torch.zeros(batch_size, c_max_len).long()
-    context_cids = torch.zeros(batch_size, c_max_len, char_dim).long()
-
-    parameters = filter(lambda p: p.requires_grad, model.parameters())
-    optimizer = optim.Adam(
-        params=parameters,
-        lr=args.lr,
-        betas=(args.beta1, args.beta2),
-        eps=1e-8,
-        weight_decay=3e-7)
-    cr = 1.0 / math.log(args.lr_warm_up_num)
-    scheduler = optim.lr_scheduler.LambdaLR(
-        optimizer,
-        lr_lambda=lambda ee: cr * math.log(ee + 1)
-        if ee < args.lr_warm_up_num else 1)
-    loss_f = torch.nn.CrossEntropyLoss()
-    
+    context_cids = torch.zeros(batch_size, c_max_len, char_dim).long()    
     
     for i in range(batch_size):
         question_wids[i, 0:question_lengths[i]] = \

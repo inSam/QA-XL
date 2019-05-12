@@ -64,8 +64,10 @@ class QANet(nn.Module):
                  self.pad != Cword).float()
         maskQ = (torch.ones_like(Qword) *
                  self.pad != Qword).float()
-        
+
+        print(Cword.size())
         Cw, Cc = self.word_emb(Cword), self.char_emb(Cchar)
+        print(Cc.size())
         Qw, Qc = self.word_emb(Qword), self.char_emb(Qchar)
         C, Q = self.emb(Cc, Cw, self.LC), self.emb(Qc, Qw, self.LQ)
         Ce = self.emb_enc(C, maskC, 1, 1)
@@ -132,5 +134,5 @@ if __name__ == "__main__":
                   c_max_len, q_max_len, d_model, train_cemb=False, num_head=num_head)
     p1, p2 = qanet(context_wids, context_cids,
                        question_wids, question_cids)
-    print(p1.shape)
-    print(p2.shape)    
+    # print(p1.shape)
+    # print(p2.shape)    

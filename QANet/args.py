@@ -137,27 +137,7 @@ def get_train_args():
     parser.add_argument('--ema_decay',
                         type=float,
                         default=0.999,
-                        help='Decay rate for exponential moving average of parameters.')
-    parser.add_argument('--f_model',
-                        default=128, type=int,
-                        help='model hidden size/filter size')
-    parser.add_argument('--num_head',
-                        default=8, type=int,
-                        help='attention num head')
-    parser.add_argument('--pretrained_char',
-                        default=False, action='store_true',
-                        help='whether train char embedding or not')
-    parser.add_argument('--para_limit',
-                        type=int,
-                        default=400,
-                        help='Max number of words in a paragraph')
-    parser.add_argument('--ques_limit',
-                        type=int,
-                        default=50,
-                        help='Max number of words to keep from a question')
-    parser.add_argument('--lr_warm_up_num',
-                        default=1000, type=int,
-                        help='number of warm-up steps of learning rate')    
+                        help='Decay rate for exponential moving average of parameters.') 
     args = parser.parse_args()
 
     if args.metric_name == 'NLL':
@@ -224,7 +204,26 @@ def add_common_args(parser):
     parser.add_argument('--test_eval_file',
                         type=str,
                         default='./data/test_eval.json')
-
+    parser.add_argument('--f_model',
+                        default=128, type=int,
+                        help='model hidden size/filter size')
+    parser.add_argument('--num_head',
+                        default=8, type=int,
+                        help='attention num head')
+    parser.add_argument('--pretrained_char',
+                        default=False, action='store_true',
+                        help='whether train char embedding or not')
+    parser.add_argument('--para_limit',
+                        type=int,
+                        default=400,
+                        help='Max number of words in a paragraph')
+    parser.add_argument('--ques_limit',
+                        type=int,
+                        default=50,
+                        help='Max number of words to keep from a question')
+    parser.add_argument('--lr_warm_up_num',
+                        default=1000, type=int,
+                        help='number of warm-up steps of learning rate')   
 
 def add_train_test_args(parser):
     """Add arguments common to train.py and test.py"""

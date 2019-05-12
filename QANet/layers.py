@@ -101,6 +101,7 @@ class Embedding(nn.Module):
         ch_emb = F.dropout(ch_emb, p=self.dropout_c, training=self.training)
         ch_emb = self.conv2d(ch_emb)
         ch_emb = F.relu(ch_emb)
+        print("character embedding size after conv {}".format(ch_emb.size()))
         ch_emb, _ = torch.max(ch_emb, dim=3)
 
         wd_emb = F.dropout(wd_emb, p=self.dropout_w, training=self.training)

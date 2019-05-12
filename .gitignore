@@ -4,3 +4,5 @@ __pycache__
 .texpadtmp/
 data/
 save/
+Untrack/
+submission/
